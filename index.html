@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IM - P2P Encrypted Chat</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Join Screen -->
+  <div id="joinScreen" class="screen">
+    <div class="join-card">
+      <h1>IM</h1>
+      <p class="subtitle">End-to-end encrypted P2P chat</p>
+
+      <div class="form-group">
+        <label for="nicknameInput">Nickname</label>
+        <input type="text" id="nicknameInput" placeholder="Your name" maxlength="32" value="">
+      </div>
+
+      <div class="form-group">
+        <label for="tokenInput">Room Token</label>
+        <div class="token-row">
+          <input type="text" id="tokenInput" placeholder="Enter or generate a token" maxlength="64" autocomplete="off">
+          <button id="generateBtn" class="btn-secondary" title="Generate random token">&#x21bb;</button>
+        </div>
+      </div>
+
+      <div id="qrSection" class="qr-section" style="display:none">
+        <canvas id="qrCanvas"></canvas>
+        <p class="qr-hint">Scan to join this room</p>
+        <button id="copyLinkBtn" class="btn-link">Copy Link</button>
+      </div>
+
+      <div id="joinStatus" class="status"></div>
+
+      <button id="joinBtn" class="btn-primary">Join Room</button>
+
+      <div class="info-box">
+        <p>All messages and files are encrypted end-to-end. Only people with the room token can decrypt the content. Nothing passes through any server.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chat Screen -->
+  <div id="chatScreen" class="screen hidden">
+    <header class="chat-header">
+      <div class="header-left">
+        <span class="room-label">Room:</span>
+        <span id="roomToken" class="room-token"></span>
+        <button id="copyTokenBtn" class="btn-icon" title="Copy token">Copy</button>
+      </div>
+      <div class="header-right">
+        <span class="key-verification" title="Key fingerprint for verification">
+          Key: <code id="keyFingerprint">...</code>
+        </span>
+        <span id="peerCount" class="peer-count">0 peers</span>
+        <button id="leaveBtn" class="btn-icon btn-danger" title="Leave room">Leave</button>
+      </div>
+    </header>
+
+    <div id="messages" class="messages"></div>
+
+    <div id="dropZone" class="drop-zone">
+      <div class="drop-zone-content">
+        <div class="input-row">
+          <textarea id="messageInput" placeholder="Type a message..." rows="1"></textarea>
+          <label class="btn-icon file-btn" title="Send file">
+            &#x1f4ce;
+            <input type="file" id="fileInput" multiple hidden>
+          </label>
+          <button id="sendBtn" class="btn-primary btn-send">Send</button>
+        </div>
+        <p class="drop-hint">Drop files here to send</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="js/crypto.js"></script>
+  <script src="js/p2p.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
