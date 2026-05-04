@@ -7,6 +7,23 @@
   <meta name="mobile-web-app-capable" content="yes">
   <title>IM - P2P Encrypted Chat</title>
   <link rel="stylesheet" href="css/style.css">
+  <script>
+    // Fix iOS Safari 100vh bug (address bar overlaps content)
+    // Sets --vh to real viewport height, updates on resize/scroll
+    (function() {
+      function setVH() {
+        var vh = window.innerHeight * 0.01;
+        document.documentElement.style.setProperty('--vh', vh + 'px');
+      }
+      setVH();
+      window.addEventListener('resize', setVH);
+      window.addEventListener('orientationchange', setVH);
+      // iOS address bar show/hide triggers visualViewport resize
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', setVH);
+      }
+    })();
+  </script>
 </head>
 <body>
   <!-- Join Screen -->
