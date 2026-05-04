@@ -2,7 +2,9 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>IM - P2P Encrypted Chat</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
@@ -48,9 +50,10 @@
       <div class="header-left">
         <span class="room-label">Room:</span>
         <span id="roomToken" class="room-token"></span>
-        <button id="copyTokenBtn" class="btn-icon" title="Copy token">Copy</button>
+        <button id="sharePanelBtn" class="btn-icon share-panel-btn" title="Share room">&#x2699;</button>
       </div>
       <div class="header-right">
+        <span id="connectionStatus" class="conn-status"></span>
         <span class="key-verification" title="Key fingerprint for verification">
           Key: <code id="keyFingerprint">...</code>
         </span>
@@ -58,6 +61,30 @@
         <button id="leaveBtn" class="btn-icon btn-danger" title="Leave room">Leave</button>
       </div>
     </header>
+
+    <!-- Share Panel (hidden by default, toggled by sharePanelBtn) -->
+    <div id="sharePanel" class="share-panel hidden">
+      <div class="share-panel-inner">
+        <div class="share-section">
+          <label>Room Token</label>
+          <div class="share-row">
+            <code id="shareToken" class="share-value"></code>
+            <button id="shareCopyToken" class="btn-accent">Copy</button>
+          </div>
+        </div>
+        <div class="share-section">
+          <label>Room Link</label>
+          <div class="share-row">
+            <code id="shareLink" class="share-value share-link-value"></code>
+            <button id="shareCopyLink" class="btn-accent">Copy</button>
+          </div>
+        </div>
+        <div class="share-section share-qr-section">
+          <canvas id="shareQrCanvas"></canvas>
+        </div>
+        <button id="shareNativeBtn" class="btn-primary share-native-btn hidden">Share via...</button>
+      </div>
+    </div>
 
     <div id="messages" class="messages"></div>
 

@@ -3,31 +3,24 @@
  */
 
 const App = (() => {
-  // DOM elements
   const $ = (sel) => document.querySelector(sel);
-  const $$ = (sel) => document.querySelectorAll(sel);
 
-  // State
   let _token = '';
   let _nickname = '';
   let _connected = false;
 
   function init() {
-    // Check URL for room token
     const params = new URLSearchParams(window.location.search);
     const urlToken = params.get('room');
     if (urlToken) {
       $('#tokenInput').value = urlToken;
     }
 
-    // Check for stored nickname
     const stored = localStorage.getItem('im-nickname');
     if (stored) $('#nicknameInput').value = stored;
 
     bindEvents();
     generateQR();
-
-    // Update QR when token changes
     $('#tokenInput').addEventListener('input', debounce(generateQR, 300));
   }
 
@@ -43,10 +36,15 @@ const App = (() => {
     });
     $('#fileInput').addEventListener('change', handleFileSelect);
     $('#leaveBtn').addEventListener('click', leaveRoom);
-    $('#copyTokenBtn').addEventListener('click', copyToken);
     $('#copyLinkBtn').addEventListener('click', copyLink);
 
-    // Drag and drop
+    // Share panel
+    $('#sharePanelBtn').addEventListener('click', toggleSharePanel);
+    $('#shareCopyToken').addEventListener('click', () => copyToClipboard(_token, '#shareCopyToken'));
+    $('#shareCopyLink').addEventListener('click', () => copyToClipboard(getShareUrl(), '#shareCopyLink'));
+    $('#shareNativeBtn').addEventListener('click', nativeShare);
+
+    // Drag and drop (desktop)
     const dropZone = $('#dropZone');
     dropZone.addEventListener('dragover', (e) => {
       e.preventDefault();
@@ -67,8 +65,17 @@ const App = (() => {
     const ta = $('#messageInput');
     ta.addEventListener('input', () => {
       ta.style.height = 'auto';
-      ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+      ta.style.height = Math.min(ta.scrollHeight, 100) + 'px';
     });
+
+    // Prevent body scroll when keyboard opens on mobile
+    document.addEventListener('touchmove', (e) => {
+      // Only allow scroll inside messages area
+      const messages = $('#messages');
+      if (messages && !messages.contains(e.target) && !$('#joinScreen').contains(e.target)) {
+        // Allow if it's inside the join screen (scrollable)
+      }
+    }, { passive: true });
   }
 
   function generateToken() {
@@ -100,7 +107,7 @@ const App = (() => {
     }
 
     qrSection.style.display = 'block';
-    const url = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(token)}`;
+    const url = getShareUrlForToken(token);
 
     try {
       await QRCode.toCanvas(canvas, url, {
@@ -109,7 +116,6 @@ const App = (() => {
         color: { dark: '#e2e8f0', light: '#1e293b' }
       });
     } catch {
-      // Fallback: show URL as text
       const ctx = canvas.getContext('2d');
       canvas.width = 200;
       canvas.height = 60;
@@ -120,6 +126,132 @@ const App = (() => {
       ctx.fillText(url.slice(0, 30), 10, 30);
     }
   }
+
+  function getShareUrl() {
+    return getShareUrlForToken(_token);
+  }
+
+  function getShareUrlForToken(token) {
+    return `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(token)}`;
+  }
+
+  // --- Share Panel ---
+
+  function toggleSharePanel() {
+    const panel = $('#sharePanel');
+    const isOpen = panel.classList.contains('open');
+    if (isOpen) {
+      panel.classList.remove('open');
+      setTimeout(() => panel.classList.add('hidden'), 300);
+    } else {
+      panel.classList.remove('hidden');
+      // Force reflow
+      panel.offsetHeight;
+      panel.classList.add('open');
+      // Populate share panel
+      $('#shareToken').textContent = _token;
+      $('#shareLink').textContent = getShareUrl();
+      generateShareQR();
+      // Show native share button if supported
+      if (navigator.share) {
+        $('#shareNativeBtn').classList.remove('hidden');
+      }
+    }
+  }
+
+  async function generateShareQR() {
+    const canvas = $('#shareQrCanvas');
+    try {
+      await QRCode.toCanvas(canvas, getShareUrl(), {
+        width: 140,
+        margin: 1,
+        color: { dark: '#e2e8f0', light: '#1e293b' }
+      });
+    } catch {}
+  }
+
+  function copyToClipboard(text, btnSelector) {
+    const btn = $(btnSelector);
+    const original = btn.textContent;
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = original, 1500);
+      }).catch(() => fallbackCopy(text, btn, original));
+    } else {
+      fallbackCopy(text, btn, original);
+    }
+  }
+
+  function fallbackCopy(text, btn, original) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = original, 1500);
+    } catch {
+      // Last resort: select the text so user can copy
+      prompt('Copy this:', text);
+    }
+    document.body.removeChild(ta);
+  }
+
+  async function nativeShare() {
+    if (!navigator.share) return;
+    try {
+      await navigator.share({
+        title: 'IM - Encrypted Chat',
+        text: `Join my encrypted chat room: ${_token}`,
+        url: getShareUrl()
+      });
+    } catch {
+      // User cancelled or not supported
+    }
+  }
+
+  // --- Connection Status ---
+
+  function updateConnState(state) {
+    const el = $('#connectionStatus');
+    el.className = 'conn-status visible';
+    switch (state) {
+      case 'connecting':
+        el.textContent = 'Connecting...';
+        el.classList.add('connecting');
+        break;
+      case 'waiting':
+        el.textContent = 'Waiting for peers';
+        el.classList.add('connected');
+        break;
+      case 'connected':
+        el.textContent = 'Connected';
+        el.classList.add('connected');
+        // Auto-hide after 3s
+        setTimeout(() => {
+          if (_connected && P2P.getPeerCount() > 0) {
+            el.classList.remove('visible');
+          }
+        }, 3000);
+        break;
+      case 'reconnecting':
+        el.textContent = 'Reconnecting...';
+        el.classList.add('reconnecting');
+        break;
+      case 'failed':
+        el.textContent = 'Connection failed';
+        el.classList.add('failed');
+        break;
+      default:
+        el.classList.remove('visible');
+    }
+  }
+
+  // --- Room Join/Leave ---
 
   async function joinRoom() {
     _token = $('#tokenInput').value.trim();
@@ -132,11 +264,10 @@ const App = (() => {
 
     localStorage.setItem('im-nickname', _nickname);
 
-    // Derive encryption key from token
     showStatus('Initializing encryption...');
     await Crypto.deriveKey(_token);
 
-    // Update URL
+    // Update URL without reload
     const url = new URL(window.location);
     url.searchParams.set('room', _token);
     window.history.replaceState({}, '', url);
@@ -146,13 +277,13 @@ const App = (() => {
     $('#chatScreen').classList.remove('hidden');
     $('#roomToken').textContent = _token;
 
-    // Show key fingerprint for verification
+    // Show key fingerprint
     try {
       const fp = await Crypto.getKeyFingerprint();
       $('#keyFingerprint').textContent = fp;
     } catch {}
 
-    // Setup P2P event handlers
+    // P2P event handlers
     P2P.on('message', handleIncomingMessage);
     P2P.on('peerJoin', handlePeerJoin);
     P2P.on('peerLeave', handlePeerLeave);
@@ -161,28 +292,36 @@ const App = (() => {
     P2P.on('fileComplete', handleFileComplete);
     P2P.on('status', (msg) => addSystemMessage(msg));
     P2P.on('error', (msg) => addSystemMessage(msg, 'error'));
+    P2P.on('connState', updateConnState);
 
     // Connect
     try {
-      showStatus('Connecting...');
+      updateConnState('connecting');
       await P2P.connect(_token);
       _connected = true;
       $('#messageInput').focus();
-    } catch (err) {
-      addSystemMessage('Failed to connect. Is the room host online?', 'error');
+    } catch {
+      addSystemMessage('Connection failed. The room host may be offline or network issues occurred.', 'error');
     }
   }
 
   function leaveRoom() {
     P2P.disconnect();
     _connected = false;
+    // Close share panel
+    const panel = $('#sharePanel');
+    panel.classList.remove('open');
+    panel.classList.add('hidden');
+
     $('#chatScreen').classList.add('hidden');
     $('#joinScreen').classList.remove('hidden');
     $('#messages').innerHTML = '';
+    $('#connectionStatus').className = 'conn-status';
     addSystemMessage('Disconnected from room.');
   }
 
-  // Safe base64 encode/decode without spread operator (avoids stack overflow on large data)
+  // --- Messaging ---
+
   function bytesToBase64(bytes) {
     let binary = '';
     const chunkSize = 8192;
@@ -209,13 +348,10 @@ const App = (() => {
     input.value = '';
     input.style.height = 'auto';
 
-    // Encrypt and send
     try {
       const encrypted = await Crypto.encrypt(text);
       const b64 = bytesToBase64(encrypted);
       P2P.sendMessage(b64);
-
-      // Display locally
       addChatMessage(text, _nickname, true);
     } catch (err) {
       addSystemMessage(`Encryption error: ${err.message}`, 'error');
@@ -246,7 +382,8 @@ const App = (() => {
     $('#peerCount').textContent = `${count} peer${count !== 1 ? 's' : ''}`;
   }
 
-  // File transfer
+  // --- File Transfer ---
+
   async function handleFileSelect(e) {
     for (const file of e.target.files) {
       await sendFile(file);
@@ -269,7 +406,6 @@ const App = (() => {
     try {
       const raw = new Uint8Array(await file.arrayBuffer());
       const encrypted = await Crypto.encryptBytes(raw);
-      // Wrap encrypted bytes as a File for P2P.sendFile
       const encFile = new File([encrypted], file.name, { type: 'application/octet-stream' });
       await P2P.sendFile(encFile);
       addSystemMessage(`Sent: ${file.name}`);
@@ -284,7 +420,6 @@ const App = (() => {
 
   function handleFileChunk(transferId, received, total, size) {
     const pct = Math.round((received / total) * 100);
-    // Update or create progress indicator
     let el = $(`#progress-${transferId}`);
     if (!el) {
       el = document.createElement('div');
@@ -300,11 +435,9 @@ const App = (() => {
   }
 
   async function handleFileComplete(transferId, blob, name, size) {
-    // Remove progress indicator
     const el = $(`#progress-${transferId}`);
     if (el) el.remove();
 
-    // Decrypt the file
     try {
       const encrypted = new Uint8Array(await blob.arrayBuffer());
       const decrypted = await Crypto.decryptBytes(encrypted);
@@ -315,7 +448,8 @@ const App = (() => {
     }
   }
 
-  // UI helpers
+  // --- UI Helpers ---
+
   function addChatMessage(text, sender, isSelf) {
     const div = document.createElement('div');
     div.className = `message ${isSelf ? 'self' : 'other'}`;
@@ -366,28 +500,15 @@ const App = (() => {
 
   function scrollToBottom() {
     const container = $('#messages');
-    container.scrollTop = container.scrollHeight;
-  }
-
-  function copyToken() {
-    const token = $('#roomToken').textContent;
-    navigator.clipboard.writeText(token).then(() => {
-      const btn = $('#copyTokenBtn');
-      btn.textContent = 'Copied!';
-      setTimeout(() => btn.textContent = 'Copy', 1500);
+    requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight;
     });
   }
 
   function copyLink() {
-    const url = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(_token)}`;
-    navigator.clipboard.writeText(url).then(() => {
-      const btn = $('#copyLinkBtn');
-      btn.textContent = 'Copied!';
-      setTimeout(() => btn.textContent = 'Copy Link', 1500);
-    });
+    copyToClipboard(getShareUrl(), '#copyLinkBtn');
   }
 
-  // Utilities
   function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;

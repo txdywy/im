@@ -3,17 +3,48 @@
  * Room token is hashed to create a deterministic peer ID.
  * First peer to register becomes the host; others connect to it.
  * Host relays messages between all peers.
+ *
+ * ICE config includes TURN servers for cellular/symmetric-NAT traversal.
  */
 
 const P2P = (() => {
-  const CHUNK_SIZE = 16 * 1024; // 16KB chunks for data channel
+  const CHUNK_SIZE = 16 * 1024;
   const MAX_JOIN_RETRIES = 5;
-  const JOIN_RETRY_DELAY = 1500; // ms
+  const JOIN_RETRY_DELAY = 2000;
+  const CONNECT_TIMEOUT = 30000; // 30s per connection attempt
+
+  // Comprehensive ICE servers for NAT traversal (including cellular)
+  const ICE_SERVERS = [
+    // Google STUN
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    // Mozilla STUN
+    { urls: 'stun:stun.services.mozilla.com' },
+    // TURN relay (TCP) - handles UDP-blocked networks
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    }
+  ];
 
   let _peer = null;
-  let _connections = []; // all active DataConnections
+  let _connections = [];
   let _isHost = false;
   let _myPeerId = null;
+  let _connectTimer = null;
   let _onMessage = null;
   let _onPeerJoin = null;
   let _onPeerLeave = null;
@@ -22,8 +53,8 @@ const P2P = (() => {
   let _onFileComplete = null;
   let _onStatus = null;
   let _onError = null;
+  let _onConnState = null; // connection state changes
 
-  // Receive buffers for file transfers: key = transferId
   const _fileBuffers = new Map();
 
   function on(event, callback) {
@@ -36,13 +67,16 @@ const P2P = (() => {
       case 'fileComplete': _onFileComplete = callback; break;
       case 'status': _onStatus = callback; break;
       case 'error': _onError = callback; break;
+      case 'connState': _onConnState = callback; break;
     }
   }
 
   function emit(event, ...args) {
-    const cb = { message: _onMessage, peerJoin: _onPeerJoin, peerLeave: _onPeerLeave,
+    const cb = {
+      message: _onMessage, peerJoin: _onPeerJoin, peerLeave: _onPeerLeave,
       fileMeta: _onFileMeta, fileChunk: _onFileChunk, fileComplete: _onFileComplete,
-      status: _onStatus, error: _onError }[event];
+      status: _onStatus, error: _onError, connState: _onConnState
+    }[event];
     if (cb) cb(...args);
   }
 
@@ -53,10 +87,23 @@ const P2P = (() => {
       .map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
+  function createPeer(id) {
+    return new Peer(id, {
+      debug: 0,
+      config: {
+        iceServers: ICE_SERVERS,
+        iceTransportPolicy: 'all', // try direct first, then relay
+        sdpSemantics: 'unified-plan'
+      }
+    });
+  }
+
   function setupConnection(conn) {
     _connections.push(conn);
 
     conn.on('open', () => {
+      clearConnectTimeout();
+      emit('connState', 'connected');
       emit('status', `Peer connected: ${conn.peer.slice(0, 8)}...`);
       emit('peerJoin', conn.peer, _connections.length);
       broadcast({ type: 'peerCount', count: _connections.length }, null);
@@ -80,9 +127,7 @@ const P2P = (() => {
 
   function handleData(conn, data) {
     if (data instanceof ArrayBuffer || data instanceof Uint8Array) {
-      // Binary data = file chunk
       handleFileChunk(data);
-      // Relay binary to other peers if host
       if (_isHost) broadcast(data, conn);
       return;
     }
@@ -93,7 +138,6 @@ const P2P = (() => {
         switch (msg.type) {
           case 'chat':
             emit('message', msg.payload, conn.peer);
-            // Relay to all other peers if host
             if (_isHost) broadcast(data, conn);
             break;
           case 'fileMeta':
@@ -102,7 +146,6 @@ const P2P = (() => {
               chunks: [], received: 0, totalChunks: msg.totalChunks
             });
             emit('fileMeta', msg);
-            // Relay to other peers if host
             if (_isHost) broadcast(data, conn);
             break;
           case 'fileEnd': {
@@ -112,7 +155,6 @@ const P2P = (() => {
               emit('fileComplete', msg.transferId, blob, buf.name, buf.size);
               _fileBuffers.delete(msg.transferId);
             }
-            // Relay to other peers if host
             if (_isHost) broadcast(data, conn);
             break;
           }
@@ -142,29 +184,36 @@ const P2P = (() => {
     }
   }
 
-  function createPeer(id) {
-    return new Peer(id, {
-      debug: 0,
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
-        ]
-      }
-    });
+  function setConnectTimeout(reject, errMsg) {
+    clearConnectTimeout();
+    _connectTimer = setTimeout(() => {
+      emit('error', errMsg);
+      if (reject) reject(new Error(errMsg));
+    }, CONNECT_TIMEOUT);
+  }
+
+  function clearConnectTimeout() {
+    if (_connectTimer) {
+      clearTimeout(_connectTimer);
+      _connectTimer = null;
+    }
   }
 
   async function connect(token) {
     _isHost = false;
     _connections = [];
+    _fileBuffers.clear();
     const hostPeerId = await hashToken(token);
 
     return new Promise((resolve, reject) => {
+      emit('connState', 'connecting');
+
       _peer = createPeer(hostPeerId);
 
       _peer.on('open', (id) => {
         _myPeerId = id;
         _isHost = true;
+        emit('connState', 'waiting');
         emit('status', 'Room created. Waiting for peers...');
         resolve({ peerId: id, isHost: true });
       });
@@ -179,17 +228,26 @@ const P2P = (() => {
           _peer = null;
           joinExistingWithRetry(hostPeerId, 0).then(resolve).catch(reject);
         } else if (err.type === 'peer-unavailable') {
+          emit('connState', 'failed');
           emit('error', 'Room not found. Make sure the host has created the room first.');
           reject(err);
+        } else if (err.type === 'network' || err.type === 'server-error') {
+          emit('connState', 'reconnecting');
+          emit('status', 'Signaling server error. Retrying...');
+          // PeerJS auto-reconnects, but we track the state
         } else {
+          emit('connState', 'failed');
           emit('error', `PeerJS error: ${err.type} - ${err.message}`);
           reject(err);
         }
       });
 
       _peer.on('disconnected', () => {
-        emit('status', 'Disconnected from signaling server. Attempting reconnect...');
-        if (_peer) _peer.reconnect();
+        emit('connState', 'reconnecting');
+        emit('status', 'Disconnected from signaling server. Reconnecting...');
+        if (_peer) {
+          try { _peer.reconnect(); } catch {}
+        }
       });
     });
   }
@@ -197,27 +255,56 @@ const P2P = (() => {
   function joinExistingWithRetry(hostPeerId, attempt) {
     return new Promise((resolve, reject) => {
       const myId = hostPeerId + '-' + Math.random().toString(36).slice(2, 8);
+
+      if (attempt === 0) {
+        emit('connState', 'connecting');
+        emit('status', 'Connecting to room...');
+      } else {
+        emit('connState', 'connecting');
+        emit('status', `Retrying connection (${attempt + 1}/${MAX_JOIN_RETRIES})...`);
+      }
+
       _peer = createPeer(myId);
+
+      // Timeout for this attempt
+      const attemptTimer = setTimeout(() => {
+        emit('status', 'Connection attempt timed out. Retrying...');
+        if (_peer) { _peer.destroy(); _peer = null; }
+        if (attempt < MAX_JOIN_RETRIES) {
+          setTimeout(() => {
+            joinExistingWithRetry(hostPeerId, attempt + 1).then(resolve).catch(reject);
+          }, JOIN_RETRY_DELAY);
+        } else {
+          emit('connState', 'failed');
+          reject(new Error('Connection timeout'));
+        }
+      }, CONNECT_TIMEOUT);
 
       _peer.on('open', () => {
         _myPeerId = myId;
         _isHost = false;
-        const conn = _peer.connect(hostPeerId, { reliable: true });
+        const conn = _peer.connect(hostPeerId, {
+          reliable: true,
+          serialization: 'json'
+        });
+
         conn.on('open', () => {
+          clearTimeout(attemptTimer);
           setupConnection(conn);
           emit('status', 'Connected to room.');
           resolve({ peerId: myId, isHost: false });
         });
+
         conn.on('error', (err) => {
+          clearTimeout(attemptTimer);
           if (attempt < MAX_JOIN_RETRIES) {
-            emit('status', `Connection attempt failed, retrying (${attempt + 1}/${MAX_JOIN_RETRIES})...`);
-            _peer.destroy();
-            _peer = null;
+            if (_peer) { _peer.destroy(); _peer = null; }
             setTimeout(() => {
               joinExistingWithRetry(hostPeerId, attempt + 1).then(resolve).catch(reject);
             }, JOIN_RETRY_DELAY);
           } else {
-            emit('error', `Failed to connect to host after ${MAX_JOIN_RETRIES} attempts.`);
+            emit('connState', 'failed');
+            emit('error', `Failed to connect after ${MAX_JOIN_RETRIES} attempts.`);
             reject(err);
           }
         });
@@ -228,21 +315,34 @@ const P2P = (() => {
       });
 
       _peer.on('error', (err) => {
-        if (attempt < MAX_JOIN_RETRIES) {
-          _peer.destroy();
-          _peer = null;
+        clearTimeout(attemptTimer);
+        if (err.type === 'unavailable-id') {
+          // My random ID taken (unlikely), retry with new ID
+          if (_peer) { _peer.destroy(); _peer = null; }
+          setTimeout(() => {
+            joinExistingWithRetry(hostPeerId, attempt + 1).then(resolve).catch(reject);
+          }, 500);
+        } else if (attempt < MAX_JOIN_RETRIES) {
+          if (_peer) { _peer.destroy(); _peer = null; }
           setTimeout(() => {
             joinExistingWithRetry(hostPeerId, attempt + 1).then(resolve).catch(reject);
           }, JOIN_RETRY_DELAY);
         } else {
+          emit('connState', 'failed');
           emit('error', `PeerJS error: ${err.type} - ${err.message}`);
           reject(err);
+        }
+      });
+
+      _peer.on('disconnected', () => {
+        emit('connState', 'reconnecting');
+        if (_peer) {
+          try { _peer.reconnect(); } catch {}
         }
       });
     });
   }
 
-  // Broadcast data to all connections, optionally excluding a sender
   function broadcast(data, excludeConn) {
     for (const conn of _connections) {
       if (conn !== excludeConn && conn.open) {
@@ -299,6 +399,7 @@ const P2P = (() => {
   }
 
   function disconnect() {
+    clearConnectTimeout();
     for (const conn of _connections) {
       conn.close();
     }
