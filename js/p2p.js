@@ -10,20 +10,22 @@
 const P2P = (() => {
   const CHUNK_SIZE = 16 * 1024;
   const MAX_JOIN_RETRIES = 5;
-  const JOIN_RETRY_DELAY = 2000;
-  const CONNECT_TIMEOUT = 30000; // 30s per connection attempt
+  const JOIN_RETRY_DELAY = 3000;
+  const CONNECT_TIMEOUT = 45000; // 45s per attempt (cellular ICE gathering is slower)
 
-  // ICE servers for NAT traversal (kept lean to avoid SDP bloat)
+  // ICE servers for NAT traversal
+  // config.iceServers replaces PeerJS defaults, so include STUN explicitly.
+  // Kept lean (4 servers) to avoid SDP bloat that breaks PeerJS signaling.
   const ICE_SERVERS = [
-    // PeerJS default STUN (must be included since config.iceServers replaces defaults)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    // TURN relay - handles symmetric NAT and UDP-blocked cellular networks
+    // TURN UDP — best performance when relay needed
     {
-      urls: 'turn:openrelay.metered.ca:443',
+      urls: 'turn:openrelay.metered.ca:443?transport=udp',
       username: 'openrelayproject',
       credential: 'openrelayproject'
     },
+    // TURN TCP — fallback when UDP is blocked (common on cellular)
     {
       urls: 'turn:openrelay.metered.ca:443?transport=tcp',
       username: 'openrelayproject',
@@ -84,7 +86,8 @@ const P2P = (() => {
       config: {
         iceServers: ICE_SERVERS,
         iceTransportPolicy: 'all', // try direct first, then relay
-        sdpSemantics: 'unified-plan'
+        sdpSemantics: 'unified-plan',
+        iceCandidatePoolSize: 10   // pre-gather candidates to speed up ICE on mobile
       }
     });
   }
@@ -349,6 +352,7 @@ const P2P = (() => {
 
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
+    // Send original (uncompressed) size for progress display
     broadcast(JSON.stringify({
       type: 'fileMeta',
       transferId,
@@ -358,6 +362,8 @@ const P2P = (() => {
       totalChunks
     }), null);
 
+    // Per-chunk encryption: each chunk gets its own IV+GCM tag
+    // avoids holding entire encrypted file in memory (P1 OOM fix)
     const buffer = await file.arrayBuffer();
     const enc = new TextEncoder();
     const idBytes = enc.encode(transferId);
@@ -365,13 +371,14 @@ const P2P = (() => {
     for (let i = 0; i < totalChunks; i++) {
       const start = i * CHUNK_SIZE;
       const end = Math.min(start + CHUNK_SIZE, buffer.byteLength);
-      const chunk = new Uint8Array(buffer.slice(start, end));
+      const plainChunk = new Uint8Array(buffer.slice(start, end));
+      const encryptedChunk = await Crypto.encryptBytes(plainChunk);
 
-      const packet = new Uint8Array(2 + idBytes.length + chunk.length);
+      const packet = new Uint8Array(2 + idBytes.length + encryptedChunk.length);
       const view = new DataView(packet.buffer);
       view.setUint16(0, idBytes.length);
       packet.set(idBytes, 2);
-      packet.set(chunk, 2 + idBytes.length);
+      packet.set(encryptedChunk, 2 + idBytes.length);
 
       broadcast(packet, null);
 

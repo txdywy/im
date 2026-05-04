@@ -8,6 +8,7 @@ const App = (() => {
   let _token = '';
   let _nickname = '';
   let _connected = false;
+  let _blobUrls = [];
 
   function init() {
     const params = new URLSearchParams(window.location.search);
@@ -67,15 +68,6 @@ const App = (() => {
       ta.style.height = 'auto';
       ta.style.height = Math.min(ta.scrollHeight, 100) + 'px';
     });
-
-    // Prevent body scroll when keyboard opens on mobile
-    document.addEventListener('touchmove', (e) => {
-      // Only allow scroll inside messages area
-      const messages = $('#messages');
-      if (messages && !messages.contains(e.target) && !$('#joinScreen').contains(e.target)) {
-        // Allow if it's inside the join screen (scrollable)
-      }
-    }, { passive: true });
   }
 
   function generateToken() {
@@ -262,6 +254,11 @@ const App = (() => {
       return;
     }
 
+    if (typeof Peer === 'undefined' || window._peerjsFailed) {
+      showStatus('Failed to load P2P library. Check your network or try refreshing.', 'error');
+      return;
+    }
+
     localStorage.setItem('im-nickname', _nickname);
 
     showStatus('Initializing encryption...');
@@ -308,16 +305,20 @@ const App = (() => {
   function leaveRoom() {
     P2P.disconnect();
     _connected = false;
+
     // Close share panel
     const panel = $('#sharePanel');
     panel.classList.remove('open');
     panel.classList.add('hidden');
 
+    // Revoke blob URLs to free memory
+    for (const url of _blobUrls) URL.revokeObjectURL(url);
+    _blobUrls = [];
+
+    $('#connectionStatus').className = 'conn-status';
     $('#chatScreen').classList.add('hidden');
     $('#joinScreen').classList.remove('hidden');
     $('#messages').innerHTML = '';
-    $('#connectionStatus').className = 'conn-status';
-    addSystemMessage('Disconnected from room.');
   }
 
   // --- Messaging ---
@@ -434,18 +435,12 @@ const App = (() => {
     scrollToBottom();
   }
 
-  async function handleFileComplete(transferId, blob, name, size) {
+  function handleFileComplete(transferId, blob, name, size) {
     const el = $(`#progress-${transferId}`);
     if (el) el.remove();
 
-    try {
-      const encrypted = new Uint8Array(await blob.arrayBuffer());
-      const decrypted = await Crypto.decryptBytes(encrypted);
-      const decryptedBlob = new Blob([decrypted]);
-      addFileMessage(name, size, decryptedBlob);
-    } catch (err) {
-      addSystemMessage(`Failed to decrypt file: ${name}`, 'error');
-    }
+    // Chunks are already decrypted per-chunk during transfer
+    addFileMessage(name, size, blob);
   }
 
   // --- UI Helpers ---
@@ -466,6 +461,7 @@ const App = (() => {
     const div = document.createElement('div');
     div.className = 'message other file-msg';
     const url = URL.createObjectURL(blob);
+    _blobUrls.push(url);
     const ext = name.split('.').pop().toLowerCase();
     const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
 

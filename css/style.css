@@ -620,11 +620,24 @@ input[type="text"]::placeholder, textarea::placeholder {
 }
 
 .file-btn {
-  font-size: 1.15rem;
   cursor: pointer;
   padding: 0.35rem !important;
   display: flex;
   align-items: center;
+}
+
+.file-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .btn-send {
