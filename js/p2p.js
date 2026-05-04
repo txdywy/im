@@ -13,21 +13,12 @@ const P2P = (() => {
   const JOIN_RETRY_DELAY = 2000;
   const CONNECT_TIMEOUT = 30000; // 30s per connection attempt
 
-  // Comprehensive ICE servers for NAT traversal (including cellular)
+  // ICE servers for NAT traversal (kept lean to avoid SDP bloat)
   const ICE_SERVERS = [
-    // Google STUN
+    // PeerJS default STUN (must be included since config.iceServers replaces defaults)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    // Mozilla STUN
-    { urls: 'stun:stun.services.mozilla.com' },
-    // TURN relay (TCP) - handles UDP-blocked networks
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
+    // TURN relay - handles symmetric NAT and UDP-blocked cellular networks
     {
       urls: 'turn:openrelay.metered.ca:443',
       username: 'openrelayproject',
