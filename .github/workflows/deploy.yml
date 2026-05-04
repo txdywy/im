@@ -23,12 +23,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate version manifest
+      - name: Inject cache-bust version hashes
         run: |
           SHA=$(git rev-parse --short HEAD)
-          TS=$(date +%s)
-          echo "{\"sha\":\"$SHA\",\"ts\":$TS}" > version.json
-          echo "Version: $SHA @ $TS"
+          echo "Version: $SHA"
+          # Append ?v=SHA to all local asset references in HTML
+          sed -i "s|href=\"css/style.css\"|href=\"css/style.css?v=${SHA}\"|g" index.html
+          sed -i "s|src=\"js/crypto.js\"|src=\"js/crypto.js?v=${SHA}\"|g" index.html
+          sed -i "s|src=\"js/fileCache.js\"|src=\"js/fileCache.js?v=${SHA}\"|g" index.html
+          sed -i "s|src=\"js/p2p.js\"|src=\"js/p2p.js?v=${SHA}\"|g" index.html
+          sed -i "s|src=\"js/app.js\"|src=\"js/app.js?v=${SHA}\"|g" index.html
+          # Generate version.json for runtime checks
+          echo "{\"sha\":\"${SHA}\",\"ts\":$(date +%s)}" > version.json
 
       - uses: actions/configure-pages@v5
 

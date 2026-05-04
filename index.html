@@ -6,38 +6,20 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <title>IM - P2P Encrypted Chat</title>
+  <link rel="stylesheet" href="css/style.css">
   <script>
-    // Cache busting: synchronous fetch of version.json (same-origin, ~50ms)
-    // Appends ?v=SHA to ALL script/CSS URLs to force CDN cache refresh on deploy
+    // Fix iOS Safari 100vh bug (address bar overlaps content)
     (function() {
-      var v = '';
-      try {
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', 'version.json', false); // synchronous
-        xhr.send();
-        if (xhr.status === 200) {
-          var j = JSON.parse(xhr.responseText);
-          v = j.sha || j.ts || '';
-        }
-      } catch(e) {}
-      window.__v = v;
-      var q = v ? '?v=' + v : '';
-
-      document.write('<link rel="stylesheet" href="css/style.css' + q + '">');
-
-      // Viewport fix (inline)
-      document.write('<script>(' + function() {
-        function setVH() {
-          var vh = window.innerHeight * 0.01;
-          document.documentElement.style.setProperty('--vh', vh + 'px');
-        }
-        setVH();
-        window.addEventListener('resize', setVH);
-        window.addEventListener('orientationchange', setVH);
-        if (window.visualViewport) {
-          window.visualViewport.addEventListener('resize', setVH);
-        }
-      } + ')()<\/script>');
+      function setVH() {
+        var vh = window.innerHeight * 0.01;
+        document.documentElement.style.setProperty('--vh', vh + 'px');
+      }
+      setVH();
+      window.addEventListener('resize', setVH);
+      window.addEventListener('orientationchange', setVH);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', setVH);
+      }
     })();
   </script>
 </head>
@@ -96,7 +78,7 @@
       </div>
     </header>
 
-    <!-- Share Panel (hidden by default, toggled by sharePanelBtn) -->
+    <!-- Share Panel -->
     <div id="sharePanel" class="share-panel hidden">
       <div class="share-panel-inner">
         <div class="share-section">
@@ -160,32 +142,12 @@
     </div>
   </div>
 
-  <!-- Scripts: loaded with cache-bust version from build -->
-  <script>
-    (function() {
-      var q = window.__v ? '?v=' + window.__v : '';
-      var scripts = [
-        'https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js',
-        'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js',
-        'js/crypto.js' + q,
-        'js/fileCache.js' + q,
-        'js/p2p.js' + q,
-        'js/app.js' + q
-      ];
-      function loadNext(i) {
-        if (i >= scripts.length) return;
-        var s = document.createElement('script');
-        s.src = scripts[i];
-        if (scripts[i].indexOf('peerjs') !== -1) {
-          s.onerror = function() { window._peerjsFailed = true; loadNext(i + 1); };
-        } else {
-          s.onerror = function() { loadNext(i + 1); };
-        }
-        s.onload = function() { loadNext(i + 1); };
-        document.body.appendChild(s);
-      }
-      loadNext(0);
-    })();
-  </script>
+  <!-- Scripts (version hash injected by GitHub Actions build step) -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js" onerror="window._peerjsFailed=true"></script>
+  <script src="js/crypto.js"></script>
+  <script src="js/fileCache.js"></script>
+  <script src="js/p2p.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>
