@@ -297,6 +297,41 @@ const App = (() => {
       await P2P.connect(_token);
       _connected = true;
       $('#messageInput').focus();
+
+      // Resume any incomplete file transfers from IndexedDB
+      try {
+        const pending = await FileCache.list();
+        for (const item of pending) {
+          const data = await FileCache.load(item.transferId);
+          if (!data) continue;
+          const received = data.receivedChunks.size;
+          if (received < data.totalChunks) {
+            addSystemMessage(`Resuming ${data.name} (${received}/${data.totalChunks} chunks)...`);
+            // Restore P2P buffer state
+            P2P.restoreFileBuffer(item.transferId, {
+              name: data.name, size: data.size, type: data.type, totalChunks: data.totalChunks
+            }, data.chunks, data.receivedChunks);
+            // Recreate progress bar
+            const el = document.createElement('div');
+            el.id = `progress-${item.transferId}`;
+            el.className = 'transfer-progress';
+            el.innerHTML = `<div class="progress-bar"><div class="progress-fill"></div></div><span class="progress-text">0%</span>`;
+            $('#messages').appendChild(el);
+            handleFileChunk(item.transferId, received, data.totalChunks, data.size);
+            // Request missing chunks
+            const missing = [];
+            for (let i = 0; i < data.totalChunks; i++) {
+              if (!data.receivedChunks.has(i)) missing.push(i);
+            }
+            if (missing.length > 0) {
+              P2P.requestResend(item.transferId, missing);
+            }
+          } else {
+            // Already complete but somehow left in cache — clean up
+            FileCache.remove(item.transferId).catch(() => {});
+          }
+        }
+      } catch {}
     } catch {
       addSystemMessage('Connection failed. The room host may be offline or network issues occurred.', 'error');
     }
@@ -403,23 +438,27 @@ const App = (() => {
       return;
     }
 
-    addSystemMessage(`Encrypting and sending: ${file.name} (${formatSize(file.size)})...`);
+    addSystemMessage(`Sending: ${file.name} (${formatSize(file.size)})...`);
     try {
-      const raw = new Uint8Array(await file.arrayBuffer());
-      const encrypted = await Crypto.encryptBytes(raw);
-      const encFile = new File([encrypted], file.name, { type: 'application/octet-stream' });
-      await P2P.sendFile(encFile);
+      // Encryption happens per-chunk inside P2P.sendFile
+      await P2P.sendFile(file);
       addSystemMessage(`Sent: ${file.name}`);
     } catch (err) {
       addSystemMessage(`Failed to send ${file.name}: ${err.message}`, 'error');
     }
   }
 
-  function handleFileMeta(meta) {
+  async function handleFileMeta(meta) {
     addSystemMessage(`Receiving: ${meta.name} (${formatSize(meta.size)})...`);
+    // Initialise IndexedDB cache for this transfer
+    try {
+      await FileCache.save(meta.transferId, {
+        name: meta.name, size: meta.size, type: meta.mime, totalChunks: meta.totalChunks
+      }, []);
+    } catch {}
   }
 
-  function handleFileChunk(transferId, received, total, size) {
+  async function handleFileChunk(transferId, received, total, size) {
     const pct = Math.round((received / total) * 100);
     let el = $(`#progress-${transferId}`);
     if (!el) {
@@ -433,13 +472,28 @@ const App = (() => {
     el.querySelector('.progress-fill').style.width = `${pct}%`;
     el.querySelector('.progress-text').textContent = `${pct}% (${formatSize(Math.round(size * received / total))}/${formatSize(size)})`;
     scrollToBottom();
+
+    // Persist progress to IndexedDB every 20 chunks or when complete
+    if (received % 20 === 0 || received === total) {
+      try {
+        const progress = P2P.getFileProgress(transferId);
+        if (progress) {
+          await FileCache.save(transferId, {
+            name: progress.name, size: progress.size, type: progress.type, totalChunks: progress.totalChunks
+          }, progress.chunks);
+        }
+      } catch {}
+    }
   }
 
-  function handleFileComplete(transferId, blob, name, size) {
+  async function handleFileComplete(transferId, blob, name, size) {
     const el = $(`#progress-${transferId}`);
     if (el) el.remove();
 
-    // Chunks are already decrypted per-chunk during transfer
+    try {
+      await FileCache.remove(transferId);
+    } catch {}
+
     addFileMessage(name, size, blob);
   }
 

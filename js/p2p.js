@@ -12,6 +12,7 @@ const P2P = (() => {
   const MAX_JOIN_RETRIES = 5;
   const JOIN_RETRY_DELAY = 3000;
   const CONNECT_TIMEOUT = 45000; // 45s per attempt (cellular ICE gathering is slower)
+  const OUTGOING_TRANSFER_TTL = 5 * 60 * 1000; // keep sent chunks in memory for 5min
 
   // ICE servers for NAT traversal
   // config.iceServers replaces PeerJS defaults, so include STUN explicitly.
@@ -49,6 +50,7 @@ const P2P = (() => {
   let _onConnState = null; // connection state changes
 
   const _fileBuffers = new Map();
+  const _outgoingTransfers = new Map();
 
   function on(event, callback) {
     switch (event) {
@@ -119,6 +121,29 @@ const P2P = (() => {
     });
   }
 
+  function packChunk(transferId, chunkIndex, chunkData) {
+    const enc = new TextEncoder();
+    const idBytes = enc.encode(transferId);
+    const packet = new Uint8Array(2 + idBytes.length + 4 + chunkData.length);
+    const view = new DataView(packet.buffer);
+    view.setUint16(0, idBytes.length);
+    packet.set(idBytes, 2);
+    view.setUint32(2 + idBytes.length, chunkIndex);
+    packet.set(chunkData, 2 + idBytes.length + 4);
+    return packet;
+  }
+
+  function unpackChunk(data) {
+    const buf = data instanceof ArrayBuffer ? data : data.buffer;
+    const view = new DataView(buf);
+    const idLen = view.getUint16(0);
+    const decoder = new TextDecoder();
+    const transferId = decoder.decode(new Uint8Array(buf, 2, idLen));
+    const chunkIndex = view.getUint32(2 + idLen);
+    const chunkData = new Uint8Array(buf, 2 + idLen + 4);
+    return { transferId, chunkIndex, chunkData };
+  }
+
   function handleData(conn, data) {
     if (data instanceof ArrayBuffer || data instanceof Uint8Array) {
       handleFileChunk(data);
@@ -137,7 +162,9 @@ const P2P = (() => {
           case 'fileMeta':
             _fileBuffers.set(msg.transferId, {
               name: msg.name, size: msg.size, type: msg.mime,
-              chunks: [], received: 0, totalChunks: msg.totalChunks
+              chunks: new Array(msg.totalChunks).fill(null),
+              receivedChunks: new Set(),
+              totalChunks: msg.totalChunks
             });
             emit('fileMeta', msg);
             if (_isHost) broadcast(data, conn);
@@ -145,9 +172,32 @@ const P2P = (() => {
           case 'fileEnd': {
             const buf = _fileBuffers.get(msg.transferId);
             if (buf) {
-              const blob = new Blob(buf.chunks, { type: buf.type });
-              emit('fileComplete', msg.transferId, blob, buf.name, buf.size);
-              _fileBuffers.delete(msg.transferId);
+              if (buf.receivedChunks.size === buf.totalChunks) {
+                const blob = new Blob(buf.chunks.filter(c => c !== null), { type: buf.type });
+                emit('fileComplete', msg.transferId, blob, buf.name, buf.size);
+                _fileBuffers.delete(msg.transferId);
+              } else {
+                const missing = [];
+                for (let i = 0; i < buf.totalChunks; i++) {
+                  if (!buf.receivedChunks.has(i)) missing.push(i);
+                }
+                emit('status', `Resuming ${buf.name}: requesting ${missing.length} missing chunks...`);
+                broadcast(JSON.stringify({
+                  type: 'fileResend',
+                  transferId: msg.transferId,
+                  missing
+                }), null);
+              }
+            }
+            if (_isHost) broadcast(data, conn);
+            break;
+          }
+          case 'fileResend': {
+            const t = _outgoingTransfers.get(msg.transferId);
+            if (t && msg.missing && msg.missing.length > 0) {
+              for (const c of _connections) {
+                if (c.open) _sendChunksToPeer(c, msg.transferId, msg.missing);
+              }
             }
             if (_isHost) broadcast(data, conn);
             break;
@@ -162,19 +212,21 @@ const P2P = (() => {
     }
   }
 
-  function handleFileChunk(data) {
-    const buf = data instanceof ArrayBuffer ? data : data.buffer;
-    const view = new DataView(buf);
-    const idLen = view.getUint16(0);
-    const decoder = new TextDecoder();
-    const transferId = decoder.decode(new Uint8Array(buf, 2, idLen));
-    const chunkData = new Uint8Array(buf, 2 + idLen);
+  async function handleFileChunk(data) {
+    const { transferId, chunkIndex, chunkData } = unpackChunk(data);
 
     const fileBuf = _fileBuffers.get(transferId);
     if (fileBuf) {
-      fileBuf.chunks.push(chunkData);
-      fileBuf.received++;
-      emit('fileChunk', transferId, fileBuf.received, fileBuf.totalChunks, fileBuf.size);
+      if (!fileBuf.receivedChunks.has(chunkIndex)) {
+        try {
+          const decrypted = await Crypto.decryptBytes(chunkData);
+          fileBuf.chunks[chunkIndex] = decrypted;
+          fileBuf.receivedChunks.add(chunkIndex);
+        } catch {
+          // Decrypt failed — corrupted or wrong key; skip this chunk (will be re-requested)
+        }
+      }
+      emit('fileChunk', transferId, fileBuf.receivedChunks.size, fileBuf.totalChunks, fileBuf.size);
     }
   }
 
@@ -346,13 +398,31 @@ const P2P = (() => {
     broadcast(JSON.stringify({ type: 'chat', payload: text }), null);
   }
 
+  async function _sendChunksToPeer(conn, transferId, indices) {
+    const t = _outgoingTransfers.get(transferId);
+    if (!t) return;
+
+    const list = indices || Array.from({ length: t.totalChunks }, (_, i) => i);
+
+    for (let i = 0; i < list.length; i++) {
+      const idx = list[i];
+      if (idx < 0 || idx >= t.totalChunks) continue;
+      const chunk = t.chunks[idx];
+      const packet = packChunk(transferId, idx, chunk);
+      if (conn.open) conn.send(packet);
+      if (i % 10 === 0) await new Promise(r => setTimeout(r, 0));
+    }
+
+    if (conn.open) conn.send(JSON.stringify({ type: 'fileEnd', transferId }));
+  }
+
   async function sendFile(file) {
     const transferId = crypto.getRandomValues(new Uint8Array(16))
       .reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
 
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-    // Send original (uncompressed) size for progress display
+    // Broadcast metadata so peers can prepare buffers
     broadcast(JSON.stringify({
       type: 'fileMeta',
       transferId,
@@ -362,31 +432,70 @@ const P2P = (() => {
       totalChunks
     }), null);
 
-    // Per-chunk encryption: each chunk gets its own IV+GCM tag
-    // avoids holding entire encrypted file in memory (P1 OOM fix)
+    // Per-chunk encryption and keep chunks in memory for resend
     const buffer = await file.arrayBuffer();
-    const enc = new TextEncoder();
-    const idBytes = enc.encode(transferId);
-
+    const chunks = [];
     for (let i = 0; i < totalChunks; i++) {
       const start = i * CHUNK_SIZE;
       const end = Math.min(start + CHUNK_SIZE, buffer.byteLength);
       const plainChunk = new Uint8Array(buffer.slice(start, end));
       const encryptedChunk = await Crypto.encryptBytes(plainChunk);
-
-      const packet = new Uint8Array(2 + idBytes.length + encryptedChunk.length);
-      const view = new DataView(packet.buffer);
-      view.setUint16(0, idBytes.length);
-      packet.set(idBytes, 2);
-      packet.set(encryptedChunk, 2 + idBytes.length);
-
-      broadcast(packet, null);
-
-      if (i % 10 === 0) await new Promise(r => setTimeout(r, 0));
+      chunks.push(encryptedChunk);
     }
 
-    broadcast(JSON.stringify({ type: 'fileEnd', transferId }), null);
+    _outgoingTransfers.set(transferId, {
+      transferId,
+      name: file.name,
+      size: file.size,
+      type: file.type || 'application/octet-stream',
+      totalChunks,
+      chunks,
+      timer: setTimeout(() => {
+        _outgoingTransfers.delete(transferId);
+      }, OUTGOING_TRANSFER_TTL)
+    });
+
+    // Start sending to all currently connected peers
+    for (const conn of _connections) {
+      if (conn.open) _sendChunksToPeer(conn, transferId);
+    }
+
     return transferId;
+  }
+
+  function requestResend(transferId, missingIndices) {
+    if (!missingIndices || missingIndices.length === 0) return;
+    broadcast(JSON.stringify({
+      type: 'fileResend',
+      transferId,
+      missing: missingIndices
+    }), null);
+  }
+
+  function getFileProgress(transferId) {
+    const buf = _fileBuffers.get(transferId);
+    if (!buf) return null;
+    return {
+      transferId,
+      name: buf.name,
+      size: buf.size,
+      type: buf.type,
+      totalChunks: buf.totalChunks,
+      receivedChunks: Array.from(buf.receivedChunks),
+      chunks: buf.chunks.slice()
+    };
+  }
+
+  function restoreFileBuffer(transferId, meta, chunks, receivedChunks) {
+    if (_fileBuffers.has(transferId)) return;
+    _fileBuffers.set(transferId, {
+      name: meta.name,
+      size: meta.size,
+      type: meta.type,
+      totalChunks: meta.totalChunks,
+      chunks: chunks.slice(),
+      receivedChunks: new Set(receivedChunks)
+    });
   }
 
   function getPeerCount() {
@@ -400,6 +509,10 @@ const P2P = (() => {
     }
     _connections = [];
     _fileBuffers.clear();
+    for (const [, t] of _outgoingTransfers) {
+      clearTimeout(t.timer);
+    }
+    _outgoingTransfers.clear();
     if (_peer) {
       _peer.destroy();
       _peer = null;
@@ -410,6 +523,7 @@ const P2P = (() => {
 
   return {
     connect, sendMessage, sendFile, disconnect,
-    on, getPeerCount, hashToken
+    on, getPeerCount, hashToken,
+    requestResend, getFileProgress, restoreFileBuffer
   };
 })();
