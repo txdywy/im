@@ -49,6 +49,7 @@ const P2P = (() => {
   let _onError = null;
   let _onConnState = null; // connection state changes
   let _onFileResendExpired = null;
+  let _onPong = null;
 
   const _fileBuffers = new Map();
   const _outgoingTransfers = new Map();
@@ -65,6 +66,7 @@ const P2P = (() => {
       case 'error': _onError = callback; break;
       case 'connState': _onConnState = callback; break;
       case 'fileResendExpired': _onFileResendExpired = callback; break;
+      case 'pong': _onPong = callback; break;
     }
   }
 
@@ -73,7 +75,7 @@ const P2P = (() => {
       message: _onMessage, peerJoin: _onPeerJoin, peerLeave: _onPeerLeave,
       fileMeta: _onFileMeta, fileChunk: _onFileChunk, fileComplete: _onFileComplete,
       status: _onStatus, error: _onError, connState: _onConnState,
-      fileResendExpired: _onFileResendExpired
+      fileResendExpired: _onFileResendExpired, pong: _onPong
     }[event];
     if (cb) cb(...args);
   }
@@ -217,6 +219,13 @@ const P2P = (() => {
             break;
           }
           case 'peerCount':
+            break;
+          case 'ping':
+            // Auto-reply with pong
+            conn.send(JSON.stringify({ type: 'pong', id: msg.id, t: msg.t }));
+            break;
+          case 'pong':
+            emit('pong', msg.id, msg.t);
             break;
         }
       } catch {
@@ -412,6 +421,14 @@ const P2P = (() => {
     broadcast(JSON.stringify({ type: 'chat', payload: text }), null);
   }
 
+  function sendPing() {
+    const id = crypto.getRandomValues(new Uint8Array(8))
+      .reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
+    const t = Date.now();
+    broadcast(JSON.stringify({ type: 'ping', id, t }), null);
+    return { id, t };
+  }
+
   async function _sendChunksToPeer(conn, transferId, indices) {
     const t = _outgoingTransfers.get(transferId);
     if (!t) return;
@@ -539,7 +556,7 @@ const P2P = (() => {
   }
 
   return {
-    connect, sendMessage, sendFile, disconnect,
+    connect, sendMessage, sendPing, sendFile, disconnect,
     on, getPeerCount, hashToken,
     requestResend, getFileProgress, restoreFileBuffer
   };

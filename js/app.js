@@ -9,6 +9,7 @@ const App = (() => {
   let _nickname = '';
   let _connected = false;
   let _blobUrls = [];
+  let _pingTimer = null;
 
   function init() {
     const params = new URLSearchParams(window.location.search);
@@ -37,6 +38,7 @@ const App = (() => {
     });
     $('#fileInput').addEventListener('change', handleFileSelect);
     $('#leaveBtn').addEventListener('click', leaveRoom);
+    $('#pingBtn').addEventListener('click', doPing);
     $('#copyLinkBtn').addEventListener('click', copyLink);
 
     // Share panel
@@ -245,6 +247,65 @@ const App = (() => {
 
   // --- Room Join/Leave ---
 
+  function doPing() {
+    if (!_connected || P2P.getPeerCount() === 0) {
+      addSystemMessage('No peers connected to ping.', 'error');
+      return;
+    }
+
+    const overlay = $('#pingOverlay');
+    const icon = $('#pingIcon');
+    const label = $('#pingLabel');
+
+    // Show overlay with "pinging" animation
+    overlay.classList.remove('hidden');
+    overlay.classList.remove('success', 'fail');
+    icon.className = 'ping-icon pinging';
+    label.textContent = 'Pinging...';
+
+    const { id, t } = P2P.sendPing();
+
+    // Timeout after 5s
+    _pingTimer = setTimeout(() => {
+      showPingResult(false);
+      addSystemMessage('Ping timeout (5s) — peer may be unreachable.', 'error');
+    }, 5000);
+  }
+
+  function handlePong(pongId, sentTime) {
+    if (!_pingTimer) return; // not our ping
+
+    clearTimeout(_pingTimer);
+    _pingTimer = null;
+
+    const rtt = Date.now() - sentTime;
+    showPingResult(true, rtt);
+    addSystemMessage(`Pong received — RTT ${rtt}ms`);
+  }
+
+  function showPingResult(success, rtt) {
+    const overlay = $('#pingOverlay');
+    const icon = $('#pingIcon');
+    const label = $('#pingLabel');
+
+    if (success) {
+      icon.className = 'ping-icon success';
+      overlay.classList.add('success');
+      label.textContent = `${rtt}ms`;
+    } else {
+      icon.className = 'ping-icon fail';
+      overlay.classList.add('fail');
+      label.textContent = 'Timeout';
+    }
+
+    // Auto-hide after 2.5s
+    setTimeout(() => {
+      overlay.classList.add('hidden');
+      overlay.classList.remove('success', 'fail');
+      icon.className = 'ping-icon';
+    }, 2500);
+  }
+
   async function joinRoom() {
     _token = $('#tokenInput').value.trim();
     _nickname = $('#nicknameInput').value.trim() || 'Anonymous';
@@ -291,6 +352,7 @@ const App = (() => {
     P2P.on('error', (msg) => addSystemMessage(msg, 'error'));
     P2P.on('connState', updateConnState);
     P2P.on('fileResendExpired', handleFileResendExpired);
+    P2P.on('pong', handlePong);
 
     // Connect
     try {
@@ -341,6 +403,10 @@ const App = (() => {
   function leaveRoom() {
     P2P.disconnect();
     _connected = false;
+
+    // Clear ping state
+    if (_pingTimer) { clearTimeout(_pingTimer); _pingTimer = null; }
+    $('#pingOverlay').classList.add('hidden');
 
     // Close share panel
     const panel = $('#sharePanel');

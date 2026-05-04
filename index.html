@@ -75,6 +75,7 @@
           Key: <code id="keyFingerprint">...</code>
         </span>
         <span id="peerCount" class="peer-count">0 peers</span>
+        <button id="pingBtn" class="btn-icon ping-btn" title="Test connectivity">Ping</button>
         <button id="leaveBtn" class="btn-icon btn-danger" title="Leave room">Leave</button>
       </div>
     </header>
@@ -104,6 +105,17 @@
     </div>
 
     <div id="messages" class="messages"></div>
+
+    <!-- Ping overlay -->
+    <div id="pingOverlay" class="ping-overlay hidden">
+      <div class="ping-anim">
+        <div class="ping-ring"></div>
+        <div class="ping-icon" id="pingIcon">
+          <span class="ping-dot"></span>
+        </div>
+      </div>
+      <div class="ping-label" id="pingLabel">Pinging...</div>
+    </div>
 
     <div id="dropZone" class="drop-zone">
       <div class="drop-zone-content">

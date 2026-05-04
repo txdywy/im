@@ -275,6 +275,7 @@ input[type="text"]::placeholder, textarea::placeholder {
   max-width: 860px;
   margin: 0 auto;
   padding-top: var(--safe-top);
+  position: relative;
 }
 
 .chat-header {
@@ -697,6 +698,130 @@ input[type="text"]::placeholder, textarea::placeholder {
   .share-link-value { max-width: 160px; }
 
   .input-row { gap: 0.3rem; }
+}
+
+/* ===== Ping ===== */
+.ping-btn {
+  color: var(--success);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+}
+
+.ping-btn:active {
+  transform: scale(0.95);
+}
+
+.ping-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.85);
+  z-index: 100;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.3s;
+}
+
+.ping-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ping-anim {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ping-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid transparent;
+}
+
+.pinging .ping-ring,
+.ping-overlay:has(.pinging) .ping-ring {
+  border-color: var(--accent);
+  animation: ping-spin 1s linear infinite;
+}
+
+.ping-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-input);
+  transition: background 0.3s, transform 0.3s;
+}
+
+.ping-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  transition: background 0.3s;
+}
+
+.ping-icon.pinging .ping-dot {
+  animation: ping-pulse 0.8s ease-in-out infinite;
+}
+
+.ping-icon.success {
+  background: rgba(34, 197, 94, 0.2);
+  transform: scale(1.1);
+}
+
+.ping-icon.success .ping-dot {
+  background: var(--success);
+  animation: ping-pop 0.4s ease-out;
+}
+
+.ping-icon.fail {
+  background: rgba(239, 68, 68, 0.2);
+  transform: scale(1.1);
+}
+
+.ping-icon.fail .ping-dot {
+  background: var(--error);
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.ping-label {
+  margin-top: 0.8rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: color 0.3s;
+}
+
+.ping-overlay.success .ping-label { color: var(--success); }
+.ping-overlay.fail .ping-label { color: var(--error); }
+
+@keyframes ping-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes ping-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.5); opacity: 0.4; }
+}
+
+@keyframes ping-pop {
+  0% { transform: scale(0.3); opacity: 0; }
+  60% { transform: scale(1.3); }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 /* ===== Touch targets ===== */
