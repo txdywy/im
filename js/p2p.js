@@ -283,10 +283,7 @@ const P2P = (() => {
       _peer.on('open', () => {
         _myPeerId = myId;
         _isHost = false;
-        const conn = _peer.connect(hostPeerId, {
-          reliable: true,
-          serialization: 'json'
-        });
+        const conn = _peer.connect(hostPeerId, { reliable: true });
 
         conn.on('open', () => {
           clearTimeout(attemptTimer);
