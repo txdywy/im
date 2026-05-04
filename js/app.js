@@ -290,6 +290,7 @@ const App = (() => {
     P2P.on('status', (msg) => addSystemMessage(msg));
     P2P.on('error', (msg) => addSystemMessage(msg, 'error'));
     P2P.on('connState', updateConnState);
+    P2P.on('fileResendExpired', handleFileResendExpired);
 
     // Connect
     try {
@@ -495,6 +496,17 @@ const App = (() => {
     } catch {}
 
     addFileMessage(name, size, blob);
+  }
+
+  async function handleFileResendExpired(transferId) {
+    const el = $(`#progress-${transferId}`);
+    if (el) el.remove();
+
+    addSystemMessage('Transfer expired. The sender no longer has the cached file. Please ask them to resend.', 'error');
+
+    try {
+      await FileCache.remove(transferId);
+    } catch {}
   }
 
   // --- UI Helpers ---

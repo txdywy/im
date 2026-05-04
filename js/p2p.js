@@ -48,6 +48,7 @@ const P2P = (() => {
   let _onStatus = null;
   let _onError = null;
   let _onConnState = null; // connection state changes
+  let _onFileResendExpired = null;
 
   const _fileBuffers = new Map();
   const _outgoingTransfers = new Map();
@@ -63,6 +64,7 @@ const P2P = (() => {
       case 'status': _onStatus = callback; break;
       case 'error': _onError = callback; break;
       case 'connState': _onConnState = callback; break;
+      case 'fileResendExpired': _onFileResendExpired = callback; break;
     }
   }
 
@@ -70,7 +72,8 @@ const P2P = (() => {
     const cb = {
       message: _onMessage, peerJoin: _onPeerJoin, peerLeave: _onPeerLeave,
       fileMeta: _onFileMeta, fileChunk: _onFileChunk, fileComplete: _onFileComplete,
-      status: _onStatus, error: _onError, connState: _onConnState
+      status: _onStatus, error: _onError, connState: _onConnState,
+      fileResendExpired: _onFileResendExpired
     }[event];
     if (cb) cb(...args);
   }
@@ -195,10 +198,21 @@ const P2P = (() => {
           case 'fileResend': {
             const t = _outgoingTransfers.get(msg.transferId);
             if (t && msg.missing && msg.missing.length > 0) {
-              for (const c of _connections) {
-                if (c.open) _sendChunksToPeer(c, msg.transferId, msg.missing);
-              }
+              // Only send re-requested chunks back to the requesting peer
+              _sendChunksToPeer(conn, msg.transferId, msg.missing);
+            } else if (!t && msg.missing && msg.missing.length > 0) {
+              // Sender's cache expired — notify requester
+              conn.send(JSON.stringify({
+                type: 'fileResendExpired',
+                transferId: msg.transferId
+              }));
             }
+            if (_isHost) broadcast(data, conn);
+            break;
+          }
+          case 'fileResendExpired': {
+            emit('fileResendExpired', msg.transferId);
+            _fileBuffers.delete(msg.transferId);
             if (_isHost) broadcast(data, conn);
             break;
           }
@@ -408,11 +422,13 @@ const P2P = (() => {
       const idx = list[i];
       if (idx < 0 || idx >= t.totalChunks) continue;
       const chunk = t.chunks[idx];
+      if (!chunk) continue; // skip if chunk somehow missing
       const packet = packChunk(transferId, idx, chunk);
       if (conn.open) conn.send(packet);
       if (i % 10 === 0) await new Promise(r => setTimeout(r, 0));
     }
 
+    // Send fileEnd only to this specific connection
     if (conn.open) conn.send(JSON.stringify({ type: 'fileEnd', transferId }));
   }
 
@@ -482,7 +498,8 @@ const P2P = (() => {
       type: buf.type,
       totalChunks: buf.totalChunks,
       receivedChunks: Array.from(buf.receivedChunks),
-      chunks: buf.chunks.slice()
+      // Preserve sparse array structure (null = missing chunk)
+      chunks: buf.chunks.map(c => c || null)
     };
   }
 
