@@ -254,55 +254,76 @@ const App = (() => {
     }
 
     const overlay = $('#pingOverlay');
-    const icon = $('#pingIcon');
-    const label = $('#pingLabel');
+    const result = $('#pingResult');
 
-    // Show overlay with "pinging" animation
-    overlay.classList.remove('hidden');
-    overlay.classList.remove('success', 'fail');
-    icon.className = 'ping-icon pinging';
-    label.textContent = 'Pinging...';
+    // Reset overlay
+    overlay.classList.remove('hidden', 'sending', 'waiting', 'receiving', 'success', 'fail');
+    result.classList.remove('show');
+
+    // Phase 1: sending dot animation (0.7s)
+    overlay.classList.add('sending');
 
     const { id, t } = P2P.sendPing();
 
+    // Phase 2: after dot reaches peer side, show waiting state
+    setTimeout(() => {
+      overlay.classList.remove('sending');
+      overlay.classList.add('waiting');
+    }, 700);
+
     // Timeout after 5s
     _pingTimer = setTimeout(() => {
+      _pingTimer = null;
       showPingResult(false);
       addSystemMessage('Ping timeout (5s) — peer may be unreachable.', 'error');
     }, 5000);
   }
 
   function handlePong(pongId, sentTime) {
-    if (!_pingTimer) return; // not our ping
+    if (!_pingTimer) return;
 
     clearTimeout(_pingTimer);
     _pingTimer = null;
 
     const rtt = Date.now() - sentTime;
-    showPingResult(true, rtt);
-    addSystemMessage(`Pong received — RTT ${rtt}ms`);
+    const overlay = $('#pingOverlay');
+
+    // Phase 3: receiving — dot flies back
+    overlay.classList.remove('waiting');
+    overlay.classList.add('receiving');
+
+    // After dot animation, show success
+    setTimeout(() => {
+      showPingResult(true, rtt);
+      addSystemMessage(`Pong received — RTT ${rtt}ms`);
+    }, 700);
   }
 
   function showPingResult(success, rtt) {
     const overlay = $('#pingOverlay');
-    const icon = $('#pingIcon');
-    const label = $('#pingLabel');
+    const result = $('#pingResult');
+    const icon = $('#pingResultIcon');
+    const text = $('#pingResultText');
+
+    overlay.classList.remove('sending', 'waiting', 'receiving');
 
     if (success) {
-      icon.className = 'ping-icon success';
       overlay.classList.add('success');
-      label.textContent = `${rtt}ms`;
+      icon.textContent = '✔';
+      text.textContent = `${rtt}ms`;
     } else {
-      icon.className = 'ping-icon fail';
       overlay.classList.add('fail');
-      label.textContent = 'Timeout';
+      icon.textContent = '✘';
+      text.textContent = 'Timeout';
     }
+
+    result.classList.add('show');
 
     // Auto-hide after 2.5s
     setTimeout(() => {
       overlay.classList.add('hidden');
       overlay.classList.remove('success', 'fail');
-      icon.className = 'ping-icon';
+      result.classList.remove('show');
     }, 2500);
   }
 

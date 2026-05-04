@@ -23,6 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Generate version manifest
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          TS=$(date +%s)
+          echo "{\"sha\":\"$SHA\",\"ts\":$TS}" > version.json
+          echo "Version: $SHA @ $TS"
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
